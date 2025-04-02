@@ -1,12 +1,9 @@
-import time
 from chessdotcom import get_player_games_by_month, Client
 from pyspark.sql import SparkSession
 from dotenv import load_dotenv
-import os
 import asyncio
 from pyspark.sql import Row
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType
-from pyspark.sql.functions import udf, col, explode
+from pyspark.sql.types import StructType, StructField, StringType
 
 load_dotenv()
 
@@ -14,29 +11,16 @@ Client.aio = True
 Client.request_config["headers"]["User-Agent"] = (
     "Chess.com Crawler" "Contact me at openkmj@g.skku.edu"
 )
-Client.rate_limit_handler.retries = 20
-Client.rate_limit_handler.tts = 5
+Client.rate_limit_handler.retries = 20  # How many times to retry a request if it fails
+Client.rate_limit_handler.tts = 5  # How long to wait before retrying a request
 
 spark = (
     SparkSession.builder.appName("chess")
-    # .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.2.4")
-    # .config(
-    #     "spark.hadoop.fs.s3a.aws.credentials.provider",
-    #     "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-    # )
-    # .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-    # .config("spark.hadoop.fs.s3a.access.key", os.getenv("AWS_ACCESS_KEY"))
-    # .config("spark.hadoop.fs.s3a.secret.key", os.getenv("AWS_SECRET_KEY"))
-    # .config("spark.jars", "./mysql-connector-j-9.0.0.jar")
-    .config("spark.driver.memory", "8g")
-    .config("spark.executor.memory", "8g")
+    .config("spark.driver.memory", "4g")
+    .config("spark.executor.memory", "4g")
     .config("spark.driver.host", "127.0.0.1")
-    # .config("spark.sql.shuffle.partitions", 320)
     .getOrCreate()
 )
-
-# player_csv_path = "s3a://chessdb-lake/players.csv"
-# game_parquet_path = "s3a://chessdb-lake"
 
 
 schema = StructType(
@@ -103,7 +87,7 @@ def main():
     # players = player_df.select("_c0").rdd.flatMap(lambda x: x).collect()
 
     # get games
-    year = "2024"
+    year = "2025"
     months = ["03", "02", "01"]
     for month in months:
         games = asyncio.run(call(players, year, month))

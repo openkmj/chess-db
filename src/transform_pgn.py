@@ -33,8 +33,8 @@ spark = (
     # .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
     # .config("spark.hadoop.fs.s3a.access.key", os.getenv("AWS_ACCESS_KEY"))
     # .config("spark.hadoop.fs.s3a.secret.key", os.getenv("AWS_SECRET_KEY"))
-    .config("spark.executor.memory", "16g")
-    .config("spark.driver.memory", "12g")
+    .config("spark.executor.memory", "4g")
+    .config("spark.driver.memory", "4g")
     .config("spark.driver.host", "127.0.0.1")
     .getOrCreate()
 )
@@ -116,7 +116,7 @@ def parse_pgn(pgn):
 
 
 def main():
-    months = ["07", "06", "05", "04", "03", "02", "01"]
+    months = ["03", "02", "01"]
     for month in months:
         st = time.time()
         game_df = spark.read.parquet(f"./gm_im_game_log/{month}")
