@@ -1,108 +1,157 @@
-import numpy as np
 import chess
+import torch
+import torch.nn as nn
+import math
+from torch.utils.data import Dataset, DataLoader
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras import layers, models
+import torch.optim as optim
+import time
+from tqdm import tqdm
+
+PIECE_TO_INDEX = {
+    chess.PAWN: 0,
+    chess.KNIGHT: 1,
+    chess.BISHOP: 2,
+    chess.ROOK: 3,
+    chess.QUEEN: 4,
+}
 
 
-def fen_to_input(fen: str):
-    board = chess.Board(fen + " 0 1")
+def halfkp_indices(fen: str) -> tuple[list[int], list[int]]:
+    board = chess.Board(fen)
+    result = []
 
-    # 8x8 체스판 + 추가 정보용으로 19개의 채널로 확장
-    board_input = np.zeros((8, 8, 12), dtype=np.float32)
+    for turn in [chess.WHITE, chess.BLACK]:
+        king_sq = board.king(turn)
+        if king_sq is None:
+            result.append([])
+            continue
 
-    piece_map = board.piece_map()
-    for square, piece in piece_map.items():
-        x = chess.square_file(square)  # 파일 0~7
-        y = chess.square_rank(square)  # 랭크 0~7
+        indices = []
+        for sq in chess.SQUARES:
+            piece = board.piece_at(sq)
+            if piece is None or piece.piece_type == chess.KING:
+                continue
+            pt_index = PIECE_TO_INDEX.get(piece.piece_type)
+            if pt_index is None:
+                continue
+            color_offset = 0 if piece.color == turn else 1
+            piece_index = pt_index * 2 + color_offset
+            rel_sq = sq ^ (0 if turn == chess.WHITE else 56)
+            index = king_sq * 640 + piece_index * 64 + rel_sq
+            indices.append(index)
+        result.append(indices)
 
-        # 기물 종류와 색상 구분
-        piece_index = piece.piece_type - 1  # 폰: 0, 나이트: 1, ... 킹: 5
-        channel = piece_index if piece.color == chess.WHITE else piece_index + 6
-
-        board_input[y, x, channel] = 1
-
-    # 추가 정보 저장 (누구의 차례인지, 캐슬링 가능 여부, 앙파상 가능 여부)
-    additional_info = np.zeros((8, 8, 7), dtype=np.float32)  # 추가 7개의 채널
-
-    # 1. 차례 정보
-    if board.turn == chess.WHITE:
-        additional_info[:, :, 0] = 1  # 백의 차례
-    else:
-        additional_info[:, :, 0] = -1  # 흑의 차례
-
-    # 2. 캐슬링 가능 여부 (백 킹사이드, 백 퀸사이드, 흑 킹사이드, 흑 퀸사이드)
-    if board.has_kingside_castling_rights(chess.WHITE):
-        additional_info[:, :, 1] = 1
-    if board.has_queenside_castling_rights(chess.WHITE):
-        additional_info[:, :, 2] = 1
-    if board.has_kingside_castling_rights(chess.BLACK):
-        additional_info[:, :, 3] = 1
-    if board.has_queenside_castling_rights(chess.BLACK):
-        additional_info[:, :, 4] = 1
-
-    # 3. 앙파상 가능 여부 (앙파상 가능한 위치가 있을 경우)
-    if board.ep_square:
-        x_ep = chess.square_file(board.ep_square)
-        y_ep = chess.square_rank(board.ep_square)
-        additional_info[y_ep, x_ep, 5] = 1  # 앙파상 위치 표시
-
-    # 추가 정보와 체스판 상태를 결합하여 최종 입력 배열 생성
-    full_input = np.concatenate([board_input, additional_info], axis=2)
-
-    return full_input
+    return tuple(result)  # (white_indices, black_indices)
 
 
-# data set "./data_set.csv"
-# fen,total,result
+def test_halfkp_indices():
+    fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    white_indices, black_indices = halfkp_indices(fen)
 
-df = pd.read_csv("./data_set.csv")
-# csv has no header. So, we need to set header
-df.columns = ["fen", "total", "result"]
-fens = df["fen"].values
-results = df["result"].values
-
-x_data = np.array([fen_to_input(fen) for fen in fens])
-y_data = np.array(results)
-
-# test data 1000, train data rest
-# x_test = x_data[:1000]
-# y_test = y_data[:1000]
-
-# x_train = x_data[1000:]
-# y_train = y_data[1000:]
-
-x_train = x_data
-y_train = y_data
-
-print(x_train.shape, y_train.shape)
-# print(x_train[100])
-# print(y_train[100])
+    print(f"FEN: {fen}")
+    print(f"White indices count: {len(white_indices)}")
+    print(f"Sample White indices: {white_indices[:10]}")
+    print(f"Black indices count: {len(black_indices)}")
+    print(f"Sample Black indices: {black_indices[:10]}")
+    # EXPECTED OUTPUT:
+    # FEN: rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+    # White indices count: 30
+    # Sample White indices: [2944, 2689, 2818, 3075, 2821, 2694, 2951, 2568, 2569, 2570]
+    # Black indices count: 30
+    # Sample Black indices: [38904, 38649, 38778, 39035, 38781, 38654, 38911, 38512, 38513, 38514]
 
 
-def create_model():
-    model = models.Sequential()
+class NNUEModel(nn.Module):
+    def __init__(self, input_dim=40960, hidden_dim=256):
+        super().__init__()
+        # 백 / 흑 각각의 SparseLinear
+        self.white_embed = nn.EmbeddingBag(input_dim, hidden_dim, mode="sum")
+        self.black_embed = nn.EmbeddingBag(input_dim, hidden_dim, mode="sum")
 
-    # 입력: 8x8 크기의 체스판 상태 + 추가 정보 (19개의 채널)
-    model.add(layers.Conv2D(64, (3, 3), activation="relu", input_shape=(8, 8, 19)))
-    model.add(layers.Conv2D(128, (3, 3), activation="relu"))
-    model.add(layers.Flatten())
-    model.add(layers.Dense(256, activation="relu"))
+        # MLP (512 → 32 → 32 → 1)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim * 2, 32),
+            nn.ReLU(),
+            nn.Linear(32, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+        )
 
-    # 출력: 체스판 상태의 평가 (백의 승리 확률 또는 점수)
-    model.add(layers.Dense(1, activation="tanh"))  # -1 (흑 승리) ~ 1 (백 승리)
-
-    model.compile(optimizer="adam", loss="mean_squared_error", metrics=["accuracy"])
-    return model
-
-
-model = create_model()
-model.fit(x_train, y_train, epochs=50, batch_size=32)
-
-# evaluate and print the result
-# loss, acc = model.evaluate(x_test, y_test)
-# print("loss=", loss)
-# print("acc=", acc)
+    def forward(self, white_input, black_input):
+        white_vec = self.white_embed(*white_input)  # (B, 256)
+        black_vec = self.black_embed(*black_input)  # (B, 256)
+        x = torch.cat([white_vec, black_vec], dim=-1)  # (B, 512)
+        return self.mlp(x).squeeze(1)  # (B,)
 
 
-model.save("../chess_model_v1.keras")
+class ChessDataset(Dataset):
+    def __init__(self, df):
+        self.positions = df["position"].tolist()
+        self.scores = df["result"].tolist()
+
+    def __len__(self):
+        return len(self.positions)
+
+    def __getitem__(self, idx):
+        fen = self.positions[idx]
+        score = self.scores[idx]
+        white_indices, black_indices = halfkp_indices(fen)
+        return white_indices, black_indices, torch.tensor(score, dtype=torch.float32)
+
+
+def flatten_indices_and_offsets(batch_indices):
+    flat = []
+    offsets = [0]
+    for indices in batch_indices:
+        flat.extend(indices)
+        offsets.append(offsets[-1] + len(indices))
+    return torch.tensor(flat, dtype=torch.long), torch.tensor(
+        offsets[:-1], dtype=torch.long
+    )
+
+
+def collate_fn(batch):
+    batch = [x for x in batch if len(x[0]) > 0 and len(x[1]) > 0]
+    if not batch:
+        return (), (), torch.tensor([])
+    white_indices, black_indices, scores = zip(*batch)
+    white_input = flatten_indices_and_offsets(white_indices)
+    black_input = flatten_indices_and_offsets(black_indices)
+    return white_input, black_input, torch.stack(scores)
+
+
+if __name__ == "__main__":
+    df = pd.read_csv("cleaned_train_data.csv")
+    dataset = ChessDataset(df)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)
+
+    model = NNUEModel()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.MSELoss()
+
+    epochs = 5
+
+    for epoch in range(epochs):
+        start_time = time.time()
+        total_loss = 0
+        model.train()
+        for white_input, black_input, score in tqdm(
+            dataloader, desc=f"Epoch {epoch+1}"
+        ):
+            if score.numel() == 0:
+                continue
+            optimizer.zero_grad()
+            output = model(white_input, black_input)
+            loss = criterion(output, score)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        avg_loss = total_loss / len(dataloader)
+        elapsed_time = time.time() - start_time
+        print(
+            f"Epoch {epoch+1}, Average Loss: {avg_loss:.4f}, Time: {elapsed_time:.2f} sec"
+        )
+
+    torch.save(model.state_dict(), "nnue_model.pth")
+    print("✅ 모델 저장 완료: nnue_model.pth")

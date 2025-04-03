@@ -9,10 +9,12 @@ from pyspark.sql.types import (
     StringType,
     IntegerType,
     ArrayType,
+    FloatType,
 )
 from pyspark.sql.functions import udf, col, explode, count, mean, sum
 import chess.pgn
 import io
+import pandas as pd
 
 load_dotenv()
 
@@ -60,6 +62,7 @@ move_schema = ArrayType(
         [
             StructField("fen", StringType(), False),
             StructField("position", StringType(), False),
+            StructField("result", IntegerType(), False),
         ]
     )
 )
@@ -87,10 +90,16 @@ def parse_pgn(pgn):
     board = game.board()
     fen = board.fen()
     position = " ".join(fen.split(" ")[:-2])
+    result = (
+        1
+        if game.headers["Result"] == "1-0"
+        else -1 if game.headers["Result"] == "0-1" else 0
+    )
     moves = [
         {
             "fen": fen,
             "position": position,
+            "result": result,
         }
     ]
     for move in game.mainline_moves():
@@ -101,22 +110,30 @@ def parse_pgn(pgn):
             {
                 "fen": fen,
                 "position": position,
+                "result": result,
             }
         )
     return moves
 
 
-# game_parquet_path = "s3a://chessdb-lake"
-# redshift_url = "jdbc:redshift://default-workgroup.065512952094.ap-northeast-2.redshift-serverless.amazonaws.com:5439/dev"
-# properties = {
-#     "user": os.getenv("REDSHIFT_USER"),
-#     "password": os.getenv("REDSHIFT_PASSWORD"),
-#     "driver": "com.amazon.redshift.jdbc42.Driver",
-# }
+def parse_pgn_batch(iterator):
+    for df in iterator:
+        rows = []
+        for _, row in df.iterrows():
+            parsed = parse_pgn(row["pgn"])
+            for move in parsed:
+                rows.append(
+                    {
+                        "fen": move["fen"],
+                        "position": move["position"],
+                        "result": move["result"],
+                    }
+                )
+        yield pd.DataFrame(rows)
 
 
 def main():
-    year = "2024"
+    year = "2025"
     months = ["01"]
     for month in months:
         st = time.time()
@@ -135,45 +152,46 @@ def main():
 
         game_df = game_df.dropDuplicates(["uuid"])
 
-        parse_game_udf = udf(parse_game, game_schema)
-
-        game_df = game_df.withColumn("game", parse_game_udf(game_df.pgn, game_df.uuid))
-        game_df = game_df.select("game.*")
-
-        print("after parse_game_udf")
-        # print(game_df.count())
-        # game_df.show(5)
-        game_df.write.parquet(f"data/parsed_games_{year}_{month}", mode="overwrite")
-        print(f"parse_game_udf time: {time.time() - st}")
         st = time.time()
 
-        # parse_pgn_udf = udf(parse_pgn, move_schema)
+        parse_pgn_udf = udf(parse_pgn, move_schema)
+        game_df = game_df.withColumn("moves", parse_pgn_udf(game_df.pgn))
 
-        # # game_df: uuid, pgn, moves
-        # game_df = game_df.withColumn("moves", parse_pgn_udf(game_df.pgn))
+        position_df = game_df.withColumn("move", explode(game_df.moves)).select(
+            "move.position", "move.result"
+        )
 
-        # move_df = game_df.select(explode("moves").alias("move"), "result").select(
-        #     "move.*", "result"
+        position_df.persist()
+
+        # position_df = game_df.mapInPandas(
+        #     parse_pgn_batch,
+        #     schema=StructType(
+        #         [
+        #             StructField("fen", StringType(), False),
+        #             StructField("position", StringType(), False),
+        #             StructField("result", FloatType(), False),
+        #         ]
+        #     ),
         # )
 
-        # print("after parse_pgn_udf")
-        # # print(move_df.count())
-        # # move_df.show(5)
-        # move_df.write.parquet(f"data/parsed_pgn_{year}_{month}", mode="overwrite")
-        # print(f"parse_pgn_udf time: {time.time() - st}")
-        # st = time.time()
+        print("after parse_pgn_udf")
+        position_df.write.parquet(f"data/positions_{year}_{month}", mode="overwrite")
+        print(f"parse_pgn_udf time: {time.time() - st}")
+        st = time.time()
 
-        # statistics_df = move_df.groupBy("position").agg(
-        #     count("*").alias("total"),
-        #     mean("result").alias("result"),
-        #     # sum("result").alias(""), # python built-in sum 함수에 유의할것!
-        # )
+        statistics_df = position_df.groupBy("position").agg(
+            count("*").alias("total"),
+            mean("result").alias("result"),
+            # sum("result").alias(""), # python built-in sum 함수에 유의할것!
+        )
 
-        # statistics_df.write.parquet(f"data/statistics_{year}_{month}", mode="overwrite")
-        # print("total unique FEN")
-        # print(statistics_df.count())
-        # print(f"statistics time: {time.time() - st}")
-        # st = time.time()
+        statistics_df.write.parquet(f"data/statistics_{year}_{month}", mode="overwrite")
+        print("total unique FEN")
+        print(statistics_df.count())
+        print(f"statistics time: {time.time() - st}")
+        st = time.time()
+
+        position_df.unpersist()
 
     spark.stop()
 

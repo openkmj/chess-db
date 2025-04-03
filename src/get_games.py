@@ -66,8 +66,8 @@ def main():
     players = load_players()
     print("get user list success", len(players))
 
-    year = "2023"
-    months = ["12", "11", "10", "09", "08", "07", "06", "05", "04", "03", "02", "01"]
+    year = "2025"
+    months = ["01"]
     for month in months:
         games = asyncio.run(call(players, year, month))
         print(f"get games data success {year}-{month}", len(games))

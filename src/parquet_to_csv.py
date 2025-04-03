@@ -15,7 +15,7 @@ spark = (
 
 def main():
     # df = spark.read.parquet("./statistics")
-    df = spark.read.parquet(*TARGET_FILE)
+    # df = spark.read.parquet(*TARGET_FILE)
 
     # result * total을 먼저 계산해서 나중에 weighted sum 계산에 사용
     df = df.withColumn("weighted_result", col("result") * col("total"))
@@ -40,27 +40,29 @@ def main():
 
 
 def main2():
-    df = spark.read.parquet("./final")
+    df = spark.read.parquet("data/statistics_2025_01")
+    # print(df.count())
+    df = df.filter(col("total") > 10)
     print(df.count())
-    df = df.filter(col("total") == 6)
-    print(df.count())
-    df.coalesce(1).write.csv("./test_data", header=True)
+    df.coalesce(1).write.csv("data/test_data", mode="overwrite", header=True)
     df.show(5)
 
 
-# def main3():
-#     import pandas as pd
-#     import matplotlib.pyplot as plt
+def main3():
+    import pandas as pd
+    import matplotlib.pyplot as plt
 
-#     df = pd.read_csv("./train_data.csv")
-#     print("FEN 예시:", df["position"].iloc[0])
-#     print("Winrate 분포:")
-#     print(df["result"].describe())
+    df = pd.read_csv(
+        "data/test_data/part-00000-6c26913b-0203-4054-b8c5-f6d84a63103a-c000.csv"
+    )
+    print("FEN 예시:", df["position"].iloc[0])
+    print("Winrate 분포:")
+    print(df["result"].describe())
 
-#     # 히스토그램
-#     df["result"].hist(bins=20)
-#     plt.title("Winrate Histogram")
-#     plt.show()
+    # 히스토그램
+    df["result"].hist(bins=20)
+    plt.title("Winrate Histogram")
+    plt.show()
 
 
-main2()
+main3()
