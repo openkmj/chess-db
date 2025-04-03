@@ -116,15 +116,24 @@ def parse_pgn(pgn):
 
 
 def main():
-    months = ["03", "02", "01"]
+    year = "2024"
+    months = ["01"]
     for month in months:
         st = time.time()
-        game_df = spark.read.parquet(f"./gm_im_game_log/{month}")
+        game_df = spark.read.csv(
+            f"data/games_{year}_{month}.csv",
+            schema=schema,
+            multiLine=True,
+            quote='"',
+            escape='"',
+        )
         print("game_df")
-        # print(game_df.count())
-        # game_df.show(5)
+        print(game_df.count())
+        game_df.show(5)
         print(f"load time: {time.time() - st}")
         st = time.time()
+
+        game_df = game_df.dropDuplicates(["uuid"])
 
         parse_game_udf = udf(parse_game, game_schema)
 
@@ -134,45 +143,37 @@ def main():
         print("after parse_game_udf")
         # print(game_df.count())
         # game_df.show(5)
-        game_df.write.parquet(f"./after_parse_game/{month}", mode="overwrite")
+        game_df.write.parquet(f"data/parsed_games_{year}_{month}", mode="overwrite")
         print(f"parse_game_udf time: {time.time() - st}")
         st = time.time()
 
-        # game_df = game_df.select("uuid", "pgn")
+        # parse_pgn_udf = udf(parse_pgn, move_schema)
 
-        parse_pgn_udf = udf(parse_pgn, move_schema)
+        # # game_df: uuid, pgn, moves
+        # game_df = game_df.withColumn("moves", parse_pgn_udf(game_df.pgn))
 
-        # game_df: uuid, pgn, moves
-        game_df = game_df.withColumn("moves", parse_pgn_udf(game_df.pgn))
+        # move_df = game_df.select(explode("moves").alias("move"), "result").select(
+        #     "move.*", "result"
+        # )
 
-        move_df = game_df.select(explode("moves").alias("move"), "result").select(
-            "move.*", "result"
-        )
+        # print("after parse_pgn_udf")
+        # # print(move_df.count())
+        # # move_df.show(5)
+        # move_df.write.parquet(f"data/parsed_pgn_{year}_{month}", mode="overwrite")
+        # print(f"parse_pgn_udf time: {time.time() - st}")
+        # st = time.time()
 
-        print("after parse_pgn_udf")
-        # print(move_df.count())
-        # move_df.show(5)
-        move_df.write.parquet(f"./after_parse_pgn/{month}", mode="overwrite")
-        print(f"parse_pgn_udf time: {time.time() - st}")
-        st = time.time()
+        # statistics_df = move_df.groupBy("position").agg(
+        #     count("*").alias("total"),
+        #     mean("result").alias("result"),
+        #     # sum("result").alias(""), # python built-in sum 함수에 유의할것!
+        # )
 
-        statistics_df = move_df.groupBy("position").agg(
-            count("*").alias("total"),
-            mean("result").alias("result"),
-            # sum("result").alias(""), # python built-in sum 함수에 유의할것!
-        )
-        print("total unique FEN")
+        # statistics_df.write.parquet(f"data/statistics_{year}_{month}", mode="overwrite")
+        # print("total unique FEN")
         # print(statistics_df.count())
-        # statistics_df.show(5)
-        statistics_df.write.parquet(f"./statistics/{month}", mode="overwrite")
-        print(f"statistics time: {time.time() - st}")
-        st = time.time()
-
-        # print("total unique FEN over 10")
-        # print(statistics_df.filter("total > 10").count())
-
-        # print("total unique FEN over 100")
-        # print(statistics_df.filter("total > 20").count())
+        # print(f"statistics time: {time.time() - st}")
+        # st = time.time()
 
     spark.stop()
 

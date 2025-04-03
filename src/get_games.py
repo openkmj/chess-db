@@ -1,11 +1,6 @@
 from chessdotcom import get_player_games_by_month, Client
-from pyspark.sql import SparkSession
-from dotenv import load_dotenv
 import asyncio
-from pyspark.sql import Row
-from pyspark.sql.types import StructType, StructField, StringType
-
-load_dotenv()
+import csv
 
 Client.aio = True
 Client.request_config["headers"]["User-Agent"] = (
@@ -13,22 +8,6 @@ Client.request_config["headers"]["User-Agent"] = (
 )
 Client.rate_limit_handler.retries = 20  # How many times to retry a request if it fails
 Client.rate_limit_handler.tts = 5  # How long to wait before retrying a request
-
-spark = (
-    SparkSession.builder.appName("chess")
-    .config("spark.driver.memory", "4g")
-    .config("spark.executor.memory", "4g")
-    .config("spark.driver.host", "127.0.0.1")
-    .getOrCreate()
-)
-
-
-schema = StructType(
-    [
-        StructField("uuid", StringType(), False),
-        StructField("pgn", StringType(), False),
-    ]
-)
 
 
 async def gather_cors(cors):
@@ -48,9 +27,7 @@ async def call(players, year, month):
         try:
             print(f"Processing chunk {count}")
             count += 1
-            cors = [
-                get_player_games_by_month(user, year, month) for user, _, _ in chunk
-            ]
+            cors = [get_player_games_by_month(user, year, month) for user in chunk]
             response = await gather_cors(cors)
             for res in response:
                 try:
@@ -60,7 +37,7 @@ async def call(players, year, month):
                         # game_time = game["end_time"]
                         # if game_time > timestamp:
                         if "pgn" in game and game["rated"] is True:
-                            games.append(Row(uuid=game["uuid"], pgn=game["pgn"]))
+                            games.append((game["uuid"], game["pgn"]))
                     results.extend(games)
                 except:
                     pass
@@ -69,38 +46,32 @@ async def call(players, year, month):
     return results
 
 
+def load_players():
+    players = []
+    with open("data/titled_players.csv", "r") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row:
+                players.append(row[0])
+    return players
+
+
+def save_games(games, path):
+    with open(path, "w") as f:
+        writer = csv.writer(f)
+        writer.writerows(games)
+
+
 def main():
-    # get players
-    # csv format: name, timestamp
-    player_df = spark.read.csv("./titled_players.csv", header=False, inferSchema=True)
-    # slice only top 100 (for testing)
-    # player_df = player_df.limit(2000)
-    print("get players success", player_df.count())
+    players = load_players()
+    print("get user list success", len(players))
 
-    # data frame to list of c0, c1
-    # ex) [(name1, timestamp1), (name2, timestamp2), ...]
-    players = player_df.collect()
-
-    # Row to list
-    players = [(row._c0, row._c1, row._c2) for row in players]
-
-    # players = player_df.select("_c0").rdd.flatMap(lambda x: x).collect()
-
-    # get games
-    year = "2025"
-    months = ["03", "02", "01"]
+    year = "2023"
+    months = ["12", "11", "10", "09", "08", "07", "06", "05", "04", "03", "02", "01"]
     for month in months:
         games = asyncio.run(call(players, year, month))
-        print("get games data success", len(games))
-
-        game_df = spark.createDataFrame(games)
-        game_df = game_df.dropDuplicates(["uuid"])
-        print(game_df.count())
-
-        # write games to parquet
-        game_df.write.parquet(f"./gm_im_game_log/{month}", mode="overwrite")
-
-    spark.stop()
+        print(f"get games data success {year}-{month}", len(games))
+        save_games(games, f"data/games_{year}_{month}.csv")
 
 
 if __name__ == "__main__":
