@@ -1,13 +1,16 @@
 from chessdotcom import get_player_games_by_month, Client
 import asyncio
 import csv
+from typing import List
 
-Client.aio = True
+
 Client.request_config["headers"]["User-Agent"] = (
     "Chess.com Crawler" "Contact me at openkmj@g.skku.edu"
 )
 Client.rate_limit_handler.retries = 20  # How many times to retry a request if it fails
 Client.rate_limit_handler.tts = 5  # How long to wait before retrying a request
+
+CHUNK_SIZE = 50
 
 
 async def gather_cors(cors):
@@ -19,11 +22,11 @@ def chunk_list(lst, chunk_size):
         yield lst[i : i + chunk_size]
 
 
-async def call(players, year, month):
+async def fetch_games(players, year, month):
     # timestamp = int(time.time()) - 24 * 60 * 60
     count = 1
     results = []
-    for chunk in chunk_list(players, 50):
+    for chunk in chunk_list(players, CHUNK_SIZE):
         try:
             print(f"Processing chunk {count}")
             count += 1
@@ -46,9 +49,9 @@ async def call(players, year, month):
     return results
 
 
-def load_players():
+def load_players(path: str) -> List[str]:
     players = []
-    with open("data/titled_players.csv", "r") as f:
+    with open(path, "r") as f:
         reader = csv.reader(f)
         for row in reader:
             if row:
@@ -56,23 +59,21 @@ def load_players():
     return players
 
 
-def save_games(games, path):
+def save_games(games: List, path: str):
     with open(path, "w") as f:
         writer = csv.writer(f)
         writer.writerows(games)
 
 
-def main():
-    players = load_players()
-    print("get user list success", len(players))
-
-    year = "2025"
-    months = ["01"]
-    for month in months:
-        games = asyncio.run(call(players, year, month))
-        print(f"get games data success {year}-{month}", len(games))
-        save_games(games, f"data/games_{year}_{month}.csv")
-
-
-if __name__ == "__main__":
-    main()
+def collect_games(
+    year: str,
+    month: str,
+    players_path="data/titled_players.csv",
+    games_path="data/games",
+):
+    Client.aio = True
+    players = load_players(players_path)
+    print(f"Loaded {len(players)} players from {players_path}")
+    games = asyncio.run(fetch_games(players, year, month))
+    save_games(games, f"{games_path}_{year}_{month}.csv")
+    print(f"Saved {len(games)} games to {games_path}_{year}_{month}.csv")

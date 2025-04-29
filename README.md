@@ -1,18 +1,19 @@
-# Chess DB
+# Chess DB ♟️📊
 
-### Environment Set up
+Build a chess engine by collecting and analyzing chess game data.
 
-```
-docker compose up airflow-init
-```
+## Project Overview
 
-### Run
+Chess DB is a project to develop a chess engine based on statistical analysis of board positions.
 
-```
-docker compose up
-```
+It collects and analyzes game data from Chess.com to train a board evaluation model and build a chess engine.
 
-### Dependency
+<!-- ## Demo -->
 
-1. python-chess
-2. chess.com
+<!-- ## Pipeline
+
+### 1.
+
+## Pipeline Optimization
+
+## Model Training -->
